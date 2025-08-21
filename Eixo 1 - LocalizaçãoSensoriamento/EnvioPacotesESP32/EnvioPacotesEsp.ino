@@ -1,62 +1,76 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include <WiFiManager.h> // Inclui a biblioteca WiFiManager
 
 // --- Configurações do Projeto ---
-// NOVO: Define o pino onde o LED verde está conectado
-const int ledPin = 13; // D13 na maioria das placas ESP32
+const int ledPin = 13; 
+String macAddress; // Variável global para armazenar o endereço MAC
 
-// --- Configurações de Rede ---
+// --- Configurações da Rede Wi-Fi que o ESP32 vai CRIAR ---
+const char* ssid = "ESP32_CSI_Transmitter"; 
+const char* password = "password123";      
+const int channel = 8;                     
+
+// --- Configurações do Transmissor UDP ---
 WiFiUDP udp;
-const char* udpAddress = "255.255.255.255";  // broadcast
-const int udpPort = 12345;
+const int udpPort = 4444;                  
+const char* broadcastAddress = "255.255.255.255"; 
 
-// --- Controle de Tempo ---
-unsigned long lastSend = 0;
-const int sendIntervalMs = 100;  // 10 Hz
+// --- Controle de Tempo (10 pacotes por segundo) ---
+const int sendIntervalMs = 100; 
+unsigned long lastSendTime = 0;
+unsigned long packetCounter = 0;
 
 void setup() {
   Serial.begin(115200);
+  Serial.println();
 
-  // NOVO: Configura o pino do LED como saída
   pinMode(ledPin, OUTPUT);
-  // NOVO: Garante que o LED comece desligado
-  digitalWrite(ledPin, LOW);
+  digitalWrite(ledPin, LOW); 
 
-  // Instancia o WiFiManager
-  WiFiManager wm;
-  //wm.resetSettings();
+  Serial.println("Configurando o ESP32 como Ponto de Acesso (AP)...");
 
-  // Tenta conectar ao WiFi. Se não conseguir, inicia o portal de configuração.
-  if (!wm.autoConnect("PortalDeConfig_ESP32")) {
-    Serial.println("Falha ao conectar e o tempo limite expirou. Reiniciando...");
-    delay(3000);
-    ESP.restart();
+  if (WiFi.softAP(ssid, password, channel)) {
+    // CORREÇÃO: Obtemos o MAC aqui, DEPOIS que a rede foi criada com sucesso.
+    macAddress = WiFi.softAPmacAddress();
+
+    Serial.println("----------------------------------------------------");
+    Serial.print("Rede Wi-Fi '");
+    Serial.print(ssid);
+    Serial.println("' criada com sucesso!");
+    Serial.print("Endereço MAC deste ESP32: "); // Apenas para confirmar no início
+    Serial.println(macAddress);
+    Serial.print("Canal de Operação: ");
+    Serial.println(WiFi.channel());
+    Serial.print("Endereço IP do ESP32: ");
+    Serial.println(WiFi.softAPIP());
+    Serial.println("----------------------------------------------------");
+    Serial.println("Iniciando envio de pacotes UDP...");
+
+    digitalWrite(ledPin, HIGH);
+
+  } else {
+    Serial.println("Falha ao criar o Ponto de Acesso!");
+    while(1); 
   }
-
-  // Se chegou até aqui, o ESP32 está conectado!
-  Serial.println("");
-  Serial.println("Conectado à rede Wi-Fi!");
-  Serial.print("Endereço IP: ");
-  Serial.println(WiFi.localIP());
-
-  // NOVO: Acende o LED verde para indicar que a conexão foi bem-sucedida
-  digitalWrite(ledPin, HIGH);
 
   udp.begin(udpPort);
 }
 
 void loop() {
-  // O seu código original para enviar pacotes UDP permanece o mesmo
-  unsigned long now = millis();
-  if (now - lastSend >= sendIntervalMs) {
-    lastSend = now;
+  unsigned long currentTime = millis();
 
-    String msg = "ESP32 " + String(now);
-    udp.beginPacket(udpAddress, udpPort);
-    udp.write((const uint8_t *)msg.c_str(), msg.length());
+  if (currentTime - lastSendTime >= sendIntervalMs) {
+    lastSendTime = currentTime;
+
+    String message = "Packet #" + String(packetCounter);
+    
+    udp.beginPacket(broadcastAddress, udpPort);
+    udp.print(message);
     udp.endPacket();
 
-    Serial.println("Enviado: " + msg);
+    // Agora esta linha usará o endereço MAC correto que foi salvo no setup
+    Serial.println("Enviado por [" + macAddress + "]: " + message);
+    
+    packetCounter++;
   }
 }
