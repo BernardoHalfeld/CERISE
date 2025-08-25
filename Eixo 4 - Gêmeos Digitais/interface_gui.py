@@ -1,4 +1,4 @@
-# interface_gui.py (versão com correções no visualizador e na atualização da lista)
+# interface_gui.py (versão com listener de status ZMQ)
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
@@ -12,16 +12,15 @@ import shutil
 from PIL import Image
 import paramiko
 import numpy as np
+import zmq # --- NOVO: Importa ZMQ para o listener ---
 
 try:
     from Codigo_Matheus import process_scan_pair
 except ImportError:
-    messagebox.showerror("Erro Crítico", "O arquivo 'Codigo_Matheus.py' não foi encontrado. Certifique-se de que ele está na mesma pasta.")
+    messagebox.showerror("Erro Crítico", "O arquivo 'Codigo_Matheus.py' não foi encontrado.")
     sys.exit(1)
 
-# ==============================================================================
-# CLASSE DE CONTROLE REMOTO DO PI
-# ==============================================================================
+# ... (Classe PiController e outras funções auxiliares permanecem as mesmas) ...
 class PiController:
     # (Esta classe permanece inalterada)
     def __init__(self, hostname, username, password):
@@ -37,18 +36,15 @@ class PiController:
             self.ssh_client = paramiko.SSHClient()
             self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             self.ssh_client.connect(self.hostname, username=self.username, password=self.password, timeout=5)
-            print(f"Conectado com sucesso ao {self.hostname}")
             return True, f"Conectado a {self.hostname}"
         except Exception as e:
             self.ssh_client = None
-            print(f"ERRO: Falha ao conectar ao Pi: {e}")
             return False, f"Falha ao conectar: {e}"
 
     def disconnect(self):
         if self.ssh_client:
             self.ssh_client.close()
             self.ssh_client = None
-            print("Desconectado do Pi.")
             return True, "Desconectado."
         return False, "Já estava desconectado."
 
@@ -59,7 +55,6 @@ class PiController:
             stdin, stdout, stderr = self.ssh_client.exec_command(command, timeout=10)
             exit_status = stdout.channel.recv_exit_status()
             if exit_status == 0:
-                print("Script de início de sessão executado com sucesso no Pi.")
                 return True, "Comando de início enviado."
             else:
                 error = stderr.read().decode('utf-8').strip()
@@ -74,35 +69,36 @@ class PiController:
             stdin, stdout, stderr = self.ssh_client.exec_command(command, timeout=10)
             exit_status = stdout.channel.recv_exit_status()
             if exit_status == 0:
-                print("Script de parada de sessão executado com sucesso no Pi.")
                 return True, "Sessão de scanner parada."
             else:
                 error = stderr.read().decode('utf-8').strip()
                 return False, f"Falha ao parar: {error}"
         except Exception as e:
             return False, f"Exceção: {e}"
+            
+    def shutdown_pi(self):
+        if not self.ssh_client: return False, "Não conectado ao Pi."
+        command = "sudo shutdown -h now"
+        try:
+            self.ssh_client.exec_command(command, timeout=5)
+            return True, "Comando de desligamento enviado."
+        except Exception as e:
+            if isinstance(e, paramiko.ssh_exception.SSHException):
+                return True, "Comando de desligamento enviado."
+            return False, f"Exceção: {e}"
 
-# ==============================================================================
-# Funções e Classes da GUI
-# ==============================================================================
-
-# --- ALTERAÇÃO 1: Revertendo o visualizador para o tamanho padrão ---
 def show_ply_in_new_process(filepath):
     import open3d as o3d
     from pathlib import Path
     if not filepath or not Path(filepath).exists():
-        print(f"ERRO (Processo Filho): Arquivo não encontrado - {filepath}")
-        return
+        print(f"ERRO (Processo Filho): Arquivo não encontrado - {filepath}"); return
     try:
         pcd = o3d.io.read_point_cloud(str(filepath))
         if not pcd.has_points():
-            print(f"ERRO (Processo Filho): O arquivo .ply está vazio - {filepath}")
-            return
-        # Versão simples que deixa o open3d decidir o tamanho da janela
+            print(f"ERRO (Processo Filho): O arquivo .ply está vazio - {filepath}"); return
         o3d.visualization.draw_geometries([pcd], window_name=f"Visualizador - {Path(filepath).name}")
     except Exception as e:
         print(f"ERRO (Processo Filho): Ocorreu um erro ao visualizar - {e}")
-
 
 class QueueIO(queue.Queue):
     def write(self, text): self.put(text)
@@ -112,27 +108,27 @@ class MainApplication(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Cerise 3D Processor")
-        self.geometry("1200x850")
         self.after(20, lambda: self.state('zoomed'))
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_columnconfigure(0, weight=1)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
-        self.grid_rowconfigure(2, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-        
-        logo_frame = ctk.CTkFrame(self, fg_color="transparent")
-        logo_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+        header_container = ctk.CTkFrame(self, fg_color="transparent")
+        header_container.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+        header_container.grid_columnconfigure(0, weight=1)
+        logo_frame = ctk.CTkFrame(header_container, fg_color="transparent")
+        logo_frame.grid(row=0, column=0, sticky="ew")
         logo_frame.grid_columnconfigure(0, weight=1)
         try:
             logo_image_data = Image.open("logo_cerise.png")
             logo_image = ctk.CTkImage(light_image=logo_image_data, size=(200, 50))
-            logo_label = ctk.CTkLabel(logo_frame, image=logo_image, text="")
-            logo_label.grid(row=0, column=0, pady=10)
+            ctk.CTkLabel(logo_frame, image=logo_image, text="").grid(row=0, column=0, pady=10)
         except FileNotFoundError:
             ctk.CTkLabel(logo_frame, text="Cerise 3D", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=10)
         
-        self.nav_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.nav_frame = ctk.CTkFrame(header_container, fg_color="transparent")
         self.nav_frame.grid(row=1, column=0, pady=(5,10))
         self.btn_scanner_control = ctk.CTkButton(self.nav_frame, text="Controle do Scanner", command=lambda: self.show_frame(ScannerControlFrame))
         self.btn_scanner_control.pack(side="left", padx=5)
@@ -153,10 +149,8 @@ class MainApplication(ctk.CTk):
         self.show_frame(ScannerControlFrame)
 
     def show_frame(self, cont_class):
-        if cont_class == ProcessingFrame:
-             self.nav_frame.grid_remove()
-        else:
-            self.nav_frame.grid(row=1, column=0, pady=(5,10))
+        if cont_class == ProcessingFrame: self.nav_frame.grid_remove()
+        else: self.nav_frame.grid(row=1, column=0, pady=(5,10))
         
         self.btn_scanner_control.configure(state="disabled" if cont_class == ScannerControlFrame else "normal")
         self.btn_data_source.configure(state="disabled" if cont_class == DataSourceFrame else "normal")
@@ -180,8 +174,10 @@ class MainApplication(ctk.CTk):
 
     def on_closing(self):
         scanner_frame = self.frames[ScannerControlFrame]
-        if scanner_frame.pi_controller:
-            scanner_frame.pi_controller.disconnect()
+        if scanner_frame.pi_controller: scanner_frame.pi_controller.disconnect()
+        # --- NOVO: Garante que o listener ZMQ seja encerrado ---
+        if scanner_frame.status_listener_thread and scanner_frame.status_listener_thread.is_alive():
+            scanner_frame.stop_status_listener()
         sys.stdout = sys.__stdout__
         self.destroy()
 
@@ -195,31 +191,33 @@ class ScannerControlFrame(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        main_frame.grid(row=0, column=0)
-        
+        # --- NOVO: Atributos para o listener de status ZMQ ---
+        self.status_listener_thread = None
+        self.is_listening_status = False
+        self.zmq_context = zmq.Context()
+
+        main_frame = ctk.CTkFrame(self, fg_color="transparent"); main_frame.grid(row=0, column=0)
         ctk.CTkLabel(main_frame, text="Controle Remoto do Scanner", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, pady=(10, 20))
         
-        control_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        control_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+        control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
         control_frame.grid_columnconfigure(1, weight=1)
         
-        connect_frame = ctk.CTkFrame(control_frame, fg_color="transparent")
-        connect_frame.grid(row=0, column=0, rowspan=2, padx=(10,5), pady=5, sticky="ns")
-        self.pi_connect_button = ctk.CTkButton(connect_frame, text="Conectar ao Pi", command=self.connect_to_pi_thread)
-        self.pi_connect_button.pack(pady=5)
-        self.pi_disconnect_button = ctk.CTkButton(connect_frame, text="Desconectar", command=self.disconnect_from_pi_thread)
-        self.pi_disconnect_button.pack(pady=5)
+        connect_frame = ctk.CTkFrame(control_frame, fg_color="transparent"); connect_frame.grid(row=0, column=0, rowspan=2, padx=(10,5), pady=5, sticky="ns")
+        self.pi_connect_button = ctk.CTkButton(connect_frame, text="Conectar ao Pi", command=self.connect_to_pi_thread); self.pi_connect_button.pack(pady=5)
+        self.pi_disconnect_button = ctk.CTkButton(connect_frame, text="Desconectar", command=self.disconnect_from_pi_thread); self.pi_disconnect_button.pack(pady=5)
         
-        self.pi_status_label = ctk.CTkLabel(control_frame, text="Status: Desconectado", text_color="gray", anchor="w")
-        self.pi_status_label.grid(row=0, column=1, rowspan=2, padx=10, pady=5, sticky="ewns")
+        self.pi_status_label = ctk.CTkLabel(control_frame, text="Status: Desconectado", text_color="gray", anchor="w"); self.pi_status_label.grid(row=0, column=1, padx=10, pady=5, sticky="ewns")
         
-        scanner_buttons_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        scanner_buttons_frame.grid(row=2, column=0, pady=(20, 10))
-        self.start_scanner_button = ctk.CTkButton(scanner_buttons_frame, text="Iniciar Scanner", command=self.start_scanner_thread)
-        self.start_scanner_button.pack(side="left", padx=5)
-        self.stop_scanner_button = ctk.CTkButton(scanner_buttons_frame, text="Parar Scanner", command=self.stop_scanner_thread)
-        self.stop_scanner_button.pack(side="left", padx=5)
+        # --- NOVO: Label para o progresso do scan ---
+        self.scan_progress_label = ctk.CTkLabel(control_frame, text="", text_color="cyan", anchor="w"); self.scan_progress_label.grid(row=1, column=1, padx=10, pady=5, sticky="ewns")
+
+        scanner_buttons_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); scanner_buttons_frame.grid(row=2, column=0, pady=(20, 10))
+        self.start_scanner_button = ctk.CTkButton(scanner_buttons_frame, text="Iniciar Scanner", command=self.start_scanner_thread); self.start_scanner_button.pack(side="left", padx=5)
+        self.stop_scanner_button = ctk.CTkButton(scanner_buttons_frame, text="Parar Scanner", command=self.stop_scanner_thread); self.stop_scanner_button.pack(side="left", padx=5)
+
+        shutdown_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); shutdown_frame.grid(row=3, column=0, pady=(30,10))
+        self.shutdown_pi_button = ctk.CTkButton(shutdown_frame, text="Desligar o Raspberry Pi", command=self.shutdown_pi_thread, fg_color="#D9534F", hover_color="#C9302C")
+        self.shutdown_pi_button.pack()
         
         self._update_button_states('DISCONNECTED')
 
@@ -229,24 +227,28 @@ class ScannerControlFrame(ctk.CTkFrame):
             self.pi_disconnect_button.configure(state="disabled")
             self.start_scanner_button.configure(state="disabled")
             self.stop_scanner_button.configure(state="disabled")
+            self.shutdown_pi_button.configure(state="disabled") # Desligar desabilitado
             self.controller.unlock_navigation()
         elif state == 'BUSY':
             self.pi_connect_button.configure(state="disabled")
             self.pi_disconnect_button.configure(state="disabled")
             self.start_scanner_button.configure(state="disabled")
             self.stop_scanner_button.configure(state="disabled")
+            self.shutdown_pi_button.configure(state="disabled") # Desligar desabilitado
             self.controller.lock_navigation()
         elif state == 'CONNECTED_IDLE':
             self.pi_connect_button.configure(state="disabled", text="Conectado")
             self.pi_disconnect_button.configure(state="normal")
             self.start_scanner_button.configure(state="normal")
             self.stop_scanner_button.configure(state="disabled")
+            self.shutdown_pi_button.configure(state="normal") # Desligar HABILITADO
             self.controller.unlock_navigation()
         elif state == 'SCANNING':
             self.pi_connect_button.configure(state="disabled", text="Conectado")
             self.pi_disconnect_button.configure(state="disabled")
             self.start_scanner_button.configure(state="disabled")
             self.stop_scanner_button.configure(state="normal")
+            self.shutdown_pi_button.configure(state="disabled") # Desligar desabilitado
             self.controller.lock_navigation()
     
     def connect_to_pi_thread(self):
@@ -288,7 +290,7 @@ class ScannerControlFrame(ctk.CTkFrame):
         self.pi_status_label.configure(text="Status: Desconectado", text_color="gray")
         self._update_button_states('DISCONNECTED')
         self.pi_controller = None
-    
+
     def start_scanner_thread(self):
         self._update_button_states('BUSY')
         threading.Thread(target=self.start_scanner, daemon=True).start()
@@ -298,6 +300,9 @@ class ScannerControlFrame(ctk.CTkFrame):
         try:
             if self.pi_controller:
                 success, message = self.pi_controller.start_scanner(START_SCANNER_SCRIPT_PATH)
+                # --- NOVO: Inicia o listener de status se o comando foi enviado com sucesso ---
+                if success:
+                    self.start_status_listener()
         except Exception as e: message, success = f"Exceção: {e}", False
         finally: self.after(0, self.update_pi_scanner_status, success, message, False)
 
@@ -308,7 +313,10 @@ class ScannerControlFrame(ctk.CTkFrame):
     def stop_scanner(self):
         success, message = False, "Controlador do Pi não inicializado."
         try:
-            if self.pi_controller: success, message = self.pi_controller.stop_scanner(STOP_SCANNER_SCRIPT_PATH)
+            if self.pi_controller: 
+                success, message = self.pi_controller.stop_scanner(STOP_SCANNER_SCRIPT_PATH)
+                # --- NOVO: Para o listener de status ---
+                self.stop_status_listener()
         except Exception as e: message, success = f"Exceção: {e}", False
         finally: self.after(0, self.update_pi_scanner_status, success, message, True)
 
@@ -321,6 +329,74 @@ class ScannerControlFrame(ctk.CTkFrame):
             self.pi_status_label.configure(text=message, text_color="red")
             self._update_button_states('CONNECTED_IDLE')
 
+    # --- NOVO: Lógica completa do listener de status ZMQ ---
+    def start_status_listener(self):
+        if self.status_listener_thread and self.status_listener_thread.is_alive():
+            print("Listener de status já está ativo.")
+            return
+        
+        print("Iniciando listener de status do scanner...")
+        self.is_listening_status = True
+        self.status_listener_thread = threading.Thread(target=self._status_listener_loop, daemon=True)
+        self.status_listener_thread.start()
+
+    def stop_status_listener(self):
+        print("Parando listener de status do scanner...")
+        self.is_listening_status = False
+        # Pequena espera para a thread terminar
+        if self.status_listener_thread:
+            self.status_listener_thread.join(timeout=1.0)
+        self.after(0, self.update_scan_progress_label, "") # Limpa o label
+
+    def _status_listener_loop(self):
+        socket = self.zmq_context.socket(zmq.SUB)
+        socket.setsockopt(zmq.SUBSCRIBE, b"") # Se inscreve em tudo
+        socket.setsockopt(zmq.RCVTIMEO, 2000) # Timeout de 2 segundos
+        
+        # Conecta ao publisher de status do Pi
+        status_address = f"tcp://{PI_HOSTNAME}:5561"
+        socket.connect(status_address)
+        
+        print(f"Listener de status conectado a {status_address}")
+
+        while self.is_listening_status:
+            try:
+                message = socket.recv_string()
+                self.after(0, self.update_scan_progress_label, message)
+            except zmq.Again:
+                # Timeout, continua o loop
+                continue
+            except zmq.ZMQError as e:
+                if e.errno == zmq.ETERM:
+                    print("Contexto ZMQ encerrado, listener de status terminando.")
+                    break
+                else:
+                    print(f"Erro ZMQ no listener de status: {e}")
+                    break
+        
+        socket.close()
+        print("Listener de status encerrado.")
+    
+    def update_scan_progress_label(self, message):
+        self.scan_progress_label.configure(text=message)
+
+    def shutdown_pi_thread(self):
+        if messagebox.askyesno("Confirmar Desligamento", 
+                               "Você tem certeza que deseja desligar o Raspberry Pi?\n\nA conexão será perdida permanentemente até que o Pi seja ligado novamente de forma manual.",
+                               icon='warning'):
+            self._update_button_states('BUSY')
+            self.pi_status_label.configure(text="Enviando comando de desligamento...", text_color="orange")
+            threading.Thread(target=self.shutdown_pi, daemon=True).start()
+
+    def shutdown_pi(self):
+        success, message = False, "Controlador do Pi não inicializado."
+        try:
+            if self.pi_controller:
+                success, message = self.pi_controller.shutdown_pi()
+        except Exception as e:
+            message, success = f"Exceção: {e}", False
+        finally:
+            self.after(500, self.update_pi_disconnection_status) # Reutiliza a função de desconectar para limpar a UI
 
 class DataSourceFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
