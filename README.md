@@ -7,4 +7,4 @@
 
 Eixos de pesquisas presentes no repositório:
 * [Localização e Sensoriamento](https://github.com/BernardoHalfeld/CERISE/tree/main/Eixo%201%20-%20LocalizaçãoSensoriamento)
-* Gêmeos Digitais 
+* [Gêmeos Digitais e Realidade Aumentada](https://github.com/BernardoHalfeld/CERISE/tree/main/Eixo%204%20-%20Gêmeos%20Digitais) 
