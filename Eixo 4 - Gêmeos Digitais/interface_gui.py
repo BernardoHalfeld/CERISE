@@ -1,4 +1,3 @@
-# interface_gui.py (versão com listener de status ZMQ)
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
@@ -12,17 +11,15 @@ import shutil
 from PIL import Image
 import paramiko
 import numpy as np
-import zmq # --- NOVO: Importa ZMQ para o listener ---
+import zmq
 
 try:
-    from Codigo_Matheus import process_scan_pair
+    from thread import process_scan_pair
 except ImportError:
-    messagebox.showerror("Erro Crítico", "O arquivo 'Codigo_Matheus.py' não foi encontrado.")
+    messagebox.showerror("Erro Crítico", "O arquivo 'thread.py' não foi encontrado.")
     sys.exit(1)
 
-# ... (Classe PiController e outras funções auxiliares permanecem as mesmas) ...
 class PiController:
-    # (Esta classe permanece inalterada)
     def __init__(self, hostname, username, password):
         self.hostname = hostname
         self.username = username
@@ -175,7 +172,6 @@ class MainApplication(ctk.CTk):
     def on_closing(self):
         scanner_frame = self.frames[ScannerControlFrame]
         if scanner_frame.pi_controller: scanner_frame.pi_controller.disconnect()
-        # --- NOVO: Garante que o listener ZMQ seja encerrado ---
         if scanner_frame.status_listener_thread and scanner_frame.status_listener_thread.is_alive():
             scanner_frame.stop_status_listener()
         sys.stdout = sys.__stdout__
@@ -191,7 +187,6 @@ class ScannerControlFrame(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # --- NOVO: Atributos para o listener de status ZMQ ---
         self.status_listener_thread = None
         self.is_listening_status = False
         self.zmq_context = zmq.Context()
@@ -208,7 +203,6 @@ class ScannerControlFrame(ctk.CTkFrame):
         
         self.pi_status_label = ctk.CTkLabel(control_frame, text="Status: Desconectado", text_color="gray", anchor="w"); self.pi_status_label.grid(row=0, column=1, padx=10, pady=5, sticky="ewns")
         
-        # --- NOVO: Label para o progresso do scan ---
         self.scan_progress_label = ctk.CTkLabel(control_frame, text="", text_color="cyan", anchor="w"); self.scan_progress_label.grid(row=1, column=1, padx=10, pady=5, sticky="ewns")
 
         scanner_buttons_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); scanner_buttons_frame.grid(row=2, column=0, pady=(20, 10))
@@ -227,28 +221,28 @@ class ScannerControlFrame(ctk.CTkFrame):
             self.pi_disconnect_button.configure(state="disabled")
             self.start_scanner_button.configure(state="disabled")
             self.stop_scanner_button.configure(state="disabled")
-            self.shutdown_pi_button.configure(state="disabled") # Desligar desabilitado
+            self.shutdown_pi_button.configure(state="disabled")
             self.controller.unlock_navigation()
         elif state == 'BUSY':
             self.pi_connect_button.configure(state="disabled")
             self.pi_disconnect_button.configure(state="disabled")
             self.start_scanner_button.configure(state="disabled")
             self.stop_scanner_button.configure(state="disabled")
-            self.shutdown_pi_button.configure(state="disabled") # Desligar desabilitado
+            self.shutdown_pi_button.configure(state="disabled")
             self.controller.lock_navigation()
         elif state == 'CONNECTED_IDLE':
             self.pi_connect_button.configure(state="disabled", text="Conectado")
             self.pi_disconnect_button.configure(state="normal")
             self.start_scanner_button.configure(state="normal")
             self.stop_scanner_button.configure(state="disabled")
-            self.shutdown_pi_button.configure(state="normal") # Desligar HABILITADO
+            self.shutdown_pi_button.configure(state="normal")
             self.controller.unlock_navigation()
         elif state == 'SCANNING':
             self.pi_connect_button.configure(state="disabled", text="Conectado")
             self.pi_disconnect_button.configure(state="disabled")
             self.start_scanner_button.configure(state="disabled")
             self.stop_scanner_button.configure(state="normal")
-            self.shutdown_pi_button.configure(state="disabled") # Desligar desabilitado
+            self.shutdown_pi_button.configure(state="disabled")
             self.controller.lock_navigation()
     
     def connect_to_pi_thread(self):
@@ -300,7 +294,6 @@ class ScannerControlFrame(ctk.CTkFrame):
         try:
             if self.pi_controller:
                 success, message = self.pi_controller.start_scanner(START_SCANNER_SCRIPT_PATH)
-                # --- NOVO: Inicia o listener de status se o comando foi enviado com sucesso ---
                 if success:
                     self.start_status_listener()
         except Exception as e: message, success = f"Exceção: {e}", False
@@ -315,7 +308,6 @@ class ScannerControlFrame(ctk.CTkFrame):
         try:
             if self.pi_controller: 
                 success, message = self.pi_controller.stop_scanner(STOP_SCANNER_SCRIPT_PATH)
-                # --- NOVO: Para o listener de status ---
                 self.stop_status_listener()
         except Exception as e: message, success = f"Exceção: {e}", False
         finally: self.after(0, self.update_pi_scanner_status, success, message, True)
@@ -329,7 +321,6 @@ class ScannerControlFrame(ctk.CTkFrame):
             self.pi_status_label.configure(text=message, text_color="red")
             self._update_button_states('CONNECTED_IDLE')
 
-    # --- NOVO: Lógica completa do listener de status ZMQ ---
     def start_status_listener(self):
         if self.status_listener_thread and self.status_listener_thread.is_alive():
             print("Listener de status já está ativo.")
@@ -343,17 +334,16 @@ class ScannerControlFrame(ctk.CTkFrame):
     def stop_status_listener(self):
         print("Parando listener de status do scanner...")
         self.is_listening_status = False
-        # Pequena espera para a thread terminar
+
         if self.status_listener_thread:
             self.status_listener_thread.join(timeout=1.0)
-        self.after(0, self.update_scan_progress_label, "") # Limpa o label
+        self.after(0, self.update_scan_progress_label, "")
 
     def _status_listener_loop(self):
         socket = self.zmq_context.socket(zmq.SUB)
-        socket.setsockopt(zmq.SUBSCRIBE, b"") # Se inscreve em tudo
-        socket.setsockopt(zmq.RCVTIMEO, 2000) # Timeout de 2 segundos
+        socket.setsockopt(zmq.SUBSCRIBE, b"")
+        socket.setsockopt(zmq.RCVTIMEO, 2000)
         
-        # Conecta ao publisher de status do Pi
         status_address = f"tcp://{PI_HOSTNAME}:5561"
         socket.connect(status_address)
         
@@ -364,7 +354,6 @@ class ScannerControlFrame(ctk.CTkFrame):
                 message = socket.recv_string()
                 self.after(0, self.update_scan_progress_label, message)
             except zmq.Again:
-                # Timeout, continua o loop
                 continue
             except zmq.ZMQError as e:
                 if e.errno == zmq.ETERM:
@@ -396,7 +385,7 @@ class ScannerControlFrame(ctk.CTkFrame):
         except Exception as e:
             message, success = f"Exceção: {e}", False
         finally:
-            self.after(500, self.update_pi_disconnection_status) # Reutiliza a função de desconectar para limpar a UI
+            self.after(500, self.update_pi_disconnection_status) 
 
 class DataSourceFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -637,7 +626,6 @@ class ProcessingFrame(ctk.CTkFrame):
         self.after(0, self._populate_ui_from_thread, scan_ids, ply_files)
 
     def _populate_ui_from_thread(self, scan_ids, ply_files):
-        # --- ALTERAÇÃO 2: Limpa os frames antes de popular ---
         for widget in self.scrollable_scans_frame.winfo_children(): widget.destroy()
         for widget in self.scrollable_ply_frame.winfo_children(): widget.destroy()
         
@@ -737,11 +725,7 @@ class ProcessingFrame(ctk.CTkFrame):
             if sys.platform == "win32": os.startfile(self.path_entry.get())
             else: import subprocess; subprocess.Popen(["xdg-open", self.path_entry.get()])
 
-# ==============================================================================
-# BLOCO DE EXECUÇÃO PRINCIPAL
-# ==============================================================================
 if __name__ == "__main__":
-    # !! AJUSTE ESTAS VARIÁVEIS GLOBAIS !!
     PI_HOSTNAME = "raspberrypi.local"
     PI_USERNAME = "admin"
     PI_PASSWORD = "admin"
