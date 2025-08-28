@@ -3,7 +3,7 @@
 # Centro de Excelência em Redes Inteligentes Sem Fio e Serviços Avançados
 
 ### **Repositório pessoal**  
-### Pesquisador: [Bernardo Halfeld](https://github.com/BernardoHalfeld)
+### 👨‍💻 Pesquisador: [Bernardo Halfeld](https://github.com/BernardoHalfeld)
 
 Eixos de pesquisas presentes no repositório:
 * [Localização e Sensoriamento](https://github.com/BernardoHalfeld/CERISE/tree/main/Eixo%201%20-%20LocalizaçãoSensoriamento)
